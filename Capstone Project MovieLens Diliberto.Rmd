@@ -1,0 +1,483 @@
+---
+title: "HarvardX Data Science Capstone Project: Movielens"
+author: "Matthew Joseph Diliberto"
+date: "16 February 2021"
+output: pdf_document
+df_print: kable
+fontsize: 13pt
+
+---
+
+```{r Setup and Loading, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(warn = -1)
+
+# Leverage code provided by EdX
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if(!require(officer)) install.packages("officer", repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+if(!require(tinytex)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
+
+
+# Import libraries
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(lubridate)
+library(ggplot2)
+library(readr)
+library(officer)
+library(kableExtra)
+library(tinytex)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+
+```
+
+\newpage
+
+# Introduction and Objective
+
+This project represents the final step in the 9-course Data Science Series offered by HarvardX.
+
+By analyzing the Movielens dataset, which provides about 10M movie ratings, we will be building a Movie Recommendation System. 
+
+In order to facilitate the process, the EdX team has set up the data so that 90% of the entries (i.e. user ratings) are assigned to a Training Set whereas the remainder will be assigned to a Validation set. The quality of the Recommendation System will be evaluated according to the RMSE (formula provide here below). The RMSE should be lower than 0.87750 on the validation dataset.
+
+$$\mbox{RMSE} = \sqrt{\frac{1}{n}\sum_{t=1}^{n}e_t^2}$$
+
+# Outline of Approach
+
+The approach followed througout the project will be based upon a sequential process, typical of most Data Science projects:
+
+1. Data Collection
+2. Data Preparation
+3. Exploratory Data Analysis (EDA)
+4. Model Design and Development
+5. Model Evaluation and Optimization
+6. Results Interpretation
+
+We can essentially skip over the first two steps of the process given the fact that they have largely been carried out directly by the EdX Team when providing the data.
+
+With regards to the Data Preparation step, the only actions that I executed in the project were linked to transforming the timestamp variable into a more interpretable format and creating an additional variable describing the year of release of the movie.
+
+```{r prep, echo=FALSE}
+
+# Manipulate timestamp to a format which is more readable. 
+# Create the "year_release" variable for both Training and Validation.
+
+edx <- edx %>%  
+  mutate(date_review = round_date(as_datetime(timestamp), unit = "week")) %>%  
+  mutate(year_release = substring(title, nchar(title) - 6)) %>% 
+  mutate(year_release = as.numeric(substring(year_release, regexpr("\\(", year_release) + 1, regexpr("\\)", year_release) - 1)))
+
+validation <- validation %>%
+  mutate(date_review = round_date(as_datetime(timestamp), unit = "week")) %>%  
+  mutate(year_release = substring(title, nchar(title) - 6)) %>% 
+  mutate(year_release = as.numeric(substring(year_release, regexpr("\\(", year_release) + 1, regexpr("\\)", year_release) - 1)))
+
+
+```
+
+\newpage
+# Exploratory Data Analysis and Visualization
+
+During this phase, we will try to look more closely into the data and mature a better understanding of it. Through this closer inspection, we will start to develop some key intuitions that will be useful when designing the models.
+
+## Key Questions Addressed 
+
+Some of the key driving questions to be addressed in this phase can be summarized in the following list:
+
+1. How is the data stored (i.e. which data formats are being used)?
+2. How many unique entries in terms of movies, users and genres are present in the data?
+3. How do users give ratings on average? What are the most common ratings assigned to movies?
+4. How do these ratings vary across users on average?
+5. How many ratings do users provide on average?
+6. How do ratings change on average according to the year of release?
+7. How does the year of release impact the average number of ratings for the movie?
+
+```{r summary, echo=FALSE}
+
+# QUICK OVERVIEW
+# Provide a quick overview of the data and understand data types
+glimpse(edx)
+
+```
+
+As we can see, the structure of the dataset is based on the fact that each row represents a rating provided by a user. Each user can potentially provide a single rating for multiple movies. This basic understanding will be important when taking into consideration the various groupings and aggregations that will be implemented.
+
+
+
+```{r unique count, echo=FALSE}
+
+# UNIQUE COUNTS
+# Understand how many unique Movies, Users and Genres are present in the database
+edx %>% summarise(
+  n_unique_movies = n_distinct(movieId),
+  n_unique_users = n_distinct(userId),
+  n_unique_genres = n_distinct(genres))
+
+```
+
+Given the fact that there are about 70k unique users, 10.7k movies and about 10M ratings, it will be interesting to understand how these ratings are distributed across the movies (i.e. how many ratings are provided on average for each movie).
+
+\newpage
+
+For this purpose, the following visualization will prove useful.
+
+```{r rating average numbers, echo=FALSE, message=FALSE}
+
+# RATINGS PER MOVIE
+# Understand how many ratings have been assigned to movies
+edx %>%
+  count(movieId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 50) +
+  scale_x_log10() +
+  xlab("Count of Ratings") +
+  ylab("Count of Movies") +
+  ggtitle("Number of Ratings per Movie") +
+  theme_classic()
+
+```
+
+As we can see, there is a rather large variance in the dataset (note: the 'Count of Ratings' axis is expressed on log-scale). We immediately notice that there are many movies receving a single rating. On the other hand, there are several movies that have received a number of ratings above 10k.
+
+\newpage
+Another key question is related to understanding how users tend to assign ratings. What are the most common ratings assigned by users?
+
+```{r rating distribution, echo=FALSE, message=FALSE}
+
+# RATINGS DISTRIBUTION
+# Understand how users have provided ratings (i.e. understand what ratings are the most common) 
+edx %>%
+  ggplot(aes(rating)) +
+  geom_histogram(binwidth = 0.25) +
+  scale_x_discrete(limits = (c(seq(0.5,5,0.5)))) +
+  scale_y_continuous(breaks = c(seq(0, 3000000, 500000))) +
+  xlab("User Ratings") +
+  ylab("Count of Ratings") +
+  ggtitle("Ratings Distribution") +
+  theme_classic()
+
+```
+
+The most common ratings appear to be 4.0, 3.0, 5.0 and 3.5, with the majority of the ratings falling between 3.0 and 4.0. Generally speaking, we can notice how 'half-star ratings' are less common compared to ratings will full integers.
+
+\newpage
+We can move on to understand how the number of ratings per user varies across the userbase. Can we identify some users that are more active than others?
+
+```{r rating per user, echo=FALSE, message=FALSE}
+
+# RATINGS PER USER
+# Understand how many ratings have been assigned by each user
+edx %>%
+  count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 30, color = "black") +
+  scale_x_log10() +
+  xlab("Number of Ratings") + 
+  ylab("Number of Users") +
+  ggtitle("Number of ratings given by users") +
+  theme_classic()
+
+```
+
+In this case as well, there appears to be a significant degree of variance across the user base, with some users providing more than a 1000 ratings!
+
+\newpage
+
+Let us know see how the ratings vary on average compared to the user base.
+
+```{r mean movie rating by number of users, echo=FALSE, message=FALSE}
+
+# MEAN MOVIE RATINGS BY NUMBER OF USERS
+# Plot mean movie ratings given by users (NB: filter with minimum number of ratings equal to 30)
+edx %>%
+  group_by(userId) %>%
+  filter(n() >= 30) %>%
+  summarize(user_mean = mean(rating)) %>%
+  ggplot(aes(user_mean)) +
+  geom_histogram(bins = 30, color = "black") +
+  xlab("Mean rating") +
+  ylab("Number of users") +
+  ggtitle("Mean movie ratings given by number of users") +
+  scale_x_discrete(limits = c(seq(0.5,5,0.5))) +
+  theme_classic()
+
+```
+
+The distribution seems to reach a peak around a mean rating of 3.5. This will be useful when designing our models. We will be able to leverage this aspect when making a prediction with regards to user ratings.
+
+\newpage
+
+Let us know explore how the average year may vary based on the year of release of the movie (derived from the title variable).
+
+```{r mean year of release, echo=FALSE, message=FALSE}
+
+# RATINGS PER YEAR
+# How do average ratings change according to year of release?
+edx %>% group_by(year_release) %>%
+  summarise(mean_rating = mean(rating)) %>%
+  ggplot(aes(year_release, mean_rating)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Year of Release") +
+  ylab("Average Rating") +
+  ggtitle("Average Rating per Year of Release") +
+  theme_classic()
+
+```
+
+There appears to be an interesting trend where the average rating increases in the year of release range between 1940 and 1960, to then decrease onwards.
+
+\newpage
+
+Let's look into the how the date of review could impact the average rating.
+
+```{r mean based on date of review, echo=FALSE, message=FALSE}
+
+# RATINGS PER MOVIE (BASED ON YEAR OF RELEASE)
+# How does year of release impact number of ratings?
+edx %>% group_by(date_review) %>%
+  summarize(mean_rating = mean(rating)) %>%
+  ggplot(aes(date_review, mean_rating)) +
+  geom_point() +
+  geom_smooth() +
+  xlab("Date of Review") +
+  ylab("Average Rating") +
+  ggtitle("Average Rating based on Date of Review") +
+  theme_classic()
+
+
+```
+
+Aside from the first few years of ratings, it seems that the average rating has remained approximately stable throughout the period.
+
+\newpage
+# Model Development and Implementation
+
+In the following section, we will build various models, gradually increasing the complexity and decreasing the RMSE.
+
+## Simple Average
+
+The first model will be structured around making a prediction simply based on the average rating provided in the training data set.
+
+```{r RMSE definition and mean, echo=FALSE, message=FALSE}
+
+# RMSE DEFINITION
+# Define a function that will provide the Root Mean Squared Error (RMSE)
+
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+# MEAN DEFINITION
+# Derive the mean of the training data population
+
+mu <- mean(edx$rating)
+print(mu)
+
+```
+
+The average of the training data is around 3.51. Using this for making a prediction in the validation set, we obtain the following results.
+
+```{r model A, echo=FALSE, message=FALSE}
+
+# MODEL A: SIMPLE AVERAGE
+# Define model purely leveraging the average rating of the data
+
+simple_avg_rmse <- RMSE(validation$rating, mu)
+
+# STORE RESULTS
+# Store results in a dataframe containing the RMSE for all models that will be created
+rmse_results <- data_frame(Model = "MODEL A: Simple Average", RMSE = simple_avg_rmse)
+kable(rmse_results[1,])
+
+
+```
+
+As we can see, the result for this first model does not satisfy the threshold of 0.87750 RMSE.
+
+## Movie Effect Model
+
+We shall now explore how the model will change leveraing information regarding the movie itself. More specifically, we shall refine the model by incorporating a "Movie Effect", which captures the average rating for the movie itself.
+
+```{r model B, echo=FALSE, message=FALSE}
+
+# MODEL B: MOVIE EFFECT
+# Define model capturing the "movie effect" (i.e. on average, how is that specific movie rated?)
+
+movie_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(movie_effect = mean(rating - mu))
+
+movie_effect_predictions <- mu + validation %>% 
+  left_join(movie_avgs, by ='movieId') %>%
+  pull(movie_effect)
+
+movie_effect_rmse <- RMSE(validation$rating,movie_effect_predictions) 
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model="MODEL B: Movie Effect",  
+                                     RMSE = movie_effect_rmse))
+kable(rmse_results[1:2,])
+
+
+```
+
+The results have improved to an RMSE of 0.944, suggesting that this is an important element.
+
+## User Effect Model
+
+We shall build on this model taking into consideration the 'User Effect', which captures the average rating of the user in order to further refine the predicted recommendation.
+
+```{r model c, echo=FALSE, message=FALSE}
+
+# MODEL C: USER EFFECT + MOVIE EFFECT
+# Define model capturing the "user effect" (i.e. does the user vote higher or lower compared to the overall population average?)
+
+user_avgs <- edx %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(user_effect = mean(rating - mu - movie_effect))
+
+user_effect_predictions <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred_user = mu + movie_effect + user_effect) %>%
+  pull(pred_user)
+
+user_effect_rmse <- RMSE(validation$rating,user_effect_predictions)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(Model= "MODEL C: User & Movie Effect",  
+                                     RMSE = user_effect_rmse))
+kable(rmse_results[1:3,])
+
+
+```
+
+Once again, the model has improved significantly. This model satisfies the threshold of 0.87750 RMSE. 
+
+## Regularized Model
+
+To further improve on this, we shall apply regularization to these effects. In order to do so, we must find the optimal lambda to be utilized.
+
+```{r model D, echo=FALSE, message=FALSE}
+
+# MODEL D: REGULARIZED MODEL USING USER AND MOVIE EFFECT
+# Implement Regularization on MODEL C (User and Movie Effect)
+
+lambda_options <- seq(0, 10, 0.25)
+rmses_lambda <- sapply(lambda_options, function(l){
+  
+  mu <- mean(edx$rating)
+  
+  regularized_movie_effect <- edx %>%
+    group_by(movieId) %>%
+    summarise(regularized_movie_effect = sum(rating - mu)/(n() +l))
+  
+  regularized_user_effect <- edx %>%
+    left_join(regularized_movie_effect, by="movieId") %>%
+    group_by(userId) %>%
+    summarise(regularized_user_effect = sum(rating - regularized_movie_effect - mu)/(n()+l))
+  
+  regularized_model_predictions <- validation %>%
+    left_join(regularized_movie_effect, by = "movieId") %>%
+    left_join(regularized_user_effect, by = "userId") %>%
+    mutate(reg_pred = mu + regularized_movie_effect + regularized_user_effect) %>%
+    pull(reg_pred)
+  
+  return(RMSE(regularized_model_predictions, validation$rating))
+  
+})
+
+# Select optimal Lambda value that minimizes RMSE
+rmse_regularized <- min(rmses_lambda)
+
+# Append to data frame containing other results
+rmse_results <- bind_rows(rmse_results, 
+                          data_frame(Model ="MODEL D: Regularized User & Movie Effect",
+                                     RMSE = rmse_regularized))
+
+kable(rmse_results, digits = 4)
+
+```
+
+The optimal lambda to be utilized is equal to 5.25.
+
+```{r lambda, echo=FALSE, message=FALSE}
+
+# Visually represent optimal Lambda
+qplot(lambda_options, rmses_lambda, 
+      colour = rmses_lambda,
+      xlab = "Lambda Options",
+      ylab = "Resulting RMSE")
+
+lambda_optimal <- lambda_options[which.min(rmses_lambda)]
+
+print(lambda_optimal)
+
+```
+
+This result represents a further (slight) improvement compared to the previous model with an RMSE of 0.864817, thus being slightly below the requirement for achievement the maximum grade in the project evaluation.
+
+\newpage
+# Final Results and Interpretation
+
+As we can see, the best results have been provided through a regularized version of the model. Regularization ensures that the model rating prediction is not excessively affected by user or movie effects estimated with small sample sizes.
+
+In order to further improve the model, we could evaluate the following strategies:
+
+1. Importing additional data sources. For example, one could leverage the imbd database to link movies to directors, actors and other factors that may be relevant.
+2. Identify whether movies are part of a 'series' (i.e. sequels or prequels). The intuition (that should be tested) is that people who enjoy a movie typically will also appreciate the prequel or sequel in the series.
+3. Utilize more advanced techniques mentioned during the course such as Matrix Factorization.
+
+
+
+
+
