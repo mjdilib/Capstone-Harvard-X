@@ -1,0 +1,629 @@
+---
+title: "HarvardX Data Science Capstone Project: Heart Disease"
+author: "Matthew Joseph Diliberto"
+date: "16 February 2021"
+output: pdf_document
+df_print: kable
+fontsize: 13pt
+---
+
+```{r template chunk, echo=TRUE}
+
+
+
+```
+
+```{r setup packages / libraries and data download, echo=FALSE, include = FALSE}
+options(warn = -1)
+
+###############
+# Libraries and Setup
+###############
+
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if(!require(officer)) install.packages("officer", repos = "http://cran.us.r-project.org")
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+if(!require(tinytex)) install.packages("tinytex", repos = "http://cran.us.r-project.org")
+if(!require(RColorBrewer)) install.packages("RColorBrewer", repos = "http://cran.us.r-project.org")
+if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
+if(!require(fastAdaboost)) install.packages("fastAdaboost", repos = "http://cran.us.r-project.org")
+if(!require(kernlab)) install.packages("kernlab", repos = "http://cran.us.r-project.org")
+if(!require(wsrf)) install.packages("wsrf", repos = "http://cran.us.r-project.org")
+
+
+# Import libraries
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(lubridate)
+library(ggplot2)
+library(readr)
+library(kableExtra)
+library(RColorBrewer)
+library(corrplot)
+library(wsrf)
+library(kernlab)
+library(xgboost)
+
+###############
+# Download Data
+###############
+
+# Download file from UCI link
+download.file("https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data",
+              "processed.cleveland.data")
+
+# Read Table and apply comma separation
+read.table("processed.cleveland.data", sep = ",")
+
+# Load the dataset with named columns
+variable_names <- c("Age", "Sex", "Chest_Pain_Type", "Blood_Pressure_AR", "Cholesterol", "Blood_Sugar_F", "ECG_AR", "Max_HR",
+                  "Angina_Exercise", "Old_Peak", "Slope", "Number_Vessels", "Defect_Presence", "Heart_Disease")
+
+# Load dataset with reviewed names
+data_complete <- read.table("processed.cleveland.data", sep=",", col.names = variable_names)
+
+
+```
+
+\newpage
+
+# Project Scope and Objective
+
+This project represents the final step in the nine-course Data Science series, offered by HarvardX.
+
+The objective of this project is to "apply machine learning techniques that go beyond standard linear regression". The structure of the report will be the following:
+
+1. **Introduction to Database**
+2. **Exploratory Data Analysis and Visualizations**
+3. **Application of Machine Learning Techniques**
+4. **Conclusions**
+
+-----------------------------------------------------------------------------------------
+
+
+# Introduction to Database
+
+In the project, I will be analyzing the **Cleveland Heart Disease Data Set**. Having worked in the pharmaceutical sector for the past 5 years, I have chosen this area of research to further deepen my understanding of the underlying causes of the disease and how machine learning techniques can be applied.  
+
+The data set provided contains **303 instances** of patients reporting the presence or absence of heart disease. We are thus going to be dealing with a classification problem where we are trying to make a **prediction on whether the patients present heart disease or not**.
+
+In order to make these predictions, we will be leveraging **the other 13 variables in the data set**, which provide more details about the patients conditions.
+
+The complete list of the variables is the following:
+
+0. **Heart Disease** (*Target Variable*). The original data presents 5 possible values: 0 represents the absence of heart disease whereas values 1, 2, 3 and 4 indicate the presence of heart disease. For the purpose of this project, the variable has been converted into a binary variable (**Yes**: *heart disease is present*, **No**: *heart disease is not present*).
+1. **Age** of the patient.
+2. **Sex** of the patient.
+3. **Chest Pain Type**. Values range from 1-4 (1: *Typical Angina*, 2: *Atypical Angina*, 3: *Non-Anginal Pain*, 4: *Asymptomatic*)
+4. **Blood Pressure at rest**
+5. **Cholesterol level**
+6. **Blood Sugar whilst fasting**
+7. **ECG at rest**
+8. **Maximum Heart Rate achieved**
+9. **Exercise Induced Angina**
+10. **Old Peak**: *ST depression induced by exercise relative to rest*
+11. **Slope**: *the slope of the peak exercise ST segment*
+12. **Number of Vessels** *coloured by flouroscopy*
+13. **Defect Presence** *with possible values including: a) normal, b) fixed defect, c) reversable defect
+
+Furthermore, we will be dividing the data into a 80/20 split between training and test data. The performance of the models that will be developed will be evaluated on the test data.
+
+\newpage
+
+# Exploratory Data Analysis and Data Visualizations
+
+In the following section, we will try to acquire a betting understanding of the data and how variables are potentially linked to one another. 
+
+```{r glimpse INITIAL data, echo=TRUE}
+
+# Quick Overview of Initial Data
+summary(data_complete)
+
+```
+
+We can immediately notice than some variables (Number of Vessels, Defect Presence) present instances with values of '?'. For the purposes of the analysis, we will be excluding these values for the final dataset. Furthermore, we will convert the data type to factors where useful.
+
+```{r data preparation, echo=TRUE, include=FALSE}
+
+##############
+# Data Preparation
+##############
+
+# Review names
+# Binarization of target variable
+# Variable Options are made more interpretable with more explicit labels
+
+data_proc_1 <- data_complete %>% 
+  mutate(Sex = if_else(Sex == 1, "M", "F"),
+         Blood_Sugar_F = if_else(Blood_Sugar_F == 1, "Greater than 120", "Lesser or Equal to 120"),
+         Angina_Exercise = if_else(Angina_Exercise == 1, "Yes" ,"No"),
+         Chest_Pain_Type = if_else(Chest_Pain_Type == 1, "Typical Angina",
+                                   if_else(Chest_Pain_Type == 2, "Atypical Angina", 
+                                           if_else(Chest_Pain_Type == 3, "Non-Anginal", "Asymptomatic"))),
+         ECG_AR = if_else(ECG_AR == 0, "Normal",
+                           if_else(ECG_AR == 1, "Abnormal", "Probable or Definite")),
+         Slope = as.factor(Slope),
+         Number_Vessels = as.factor(Number_Vessels),
+         Defect_Presence = as.factor(Defect_Presence),
+         Heart_Disease = if_else(Heart_Disease == 0, "No", "Yes")) %>% 
+  mutate_if(is.character, as.factor) %>% #convert character variables to factors
+  dplyr::select(Heart_Disease, Sex, Blood_Sugar_F, Angina_Exercise, Chest_Pain_Type, ECG_AR, Slope, Number_Vessels, Defect_Presence, everything())
+
+# Eliminate rows with '?' values
+data_proc_2 <- data_proc_1 %>% filter_all(all_vars(.!="?"))
+
+```
+
+\newpage
+```{r glimpse FINAL data, echo=TRUE}
+
+# Quick Overview of Initial Data
+glimpse(data_proc_2)
+summary(data_proc_2)
+
+```
+
+\newpage
+Let us now deep dive into the data through a series of visualizations.
+```{r visualization A, echo=TRUE}
+# Number of Cases of Heart Disease (Count of Target Variable)
+ggplot(data = data_proc_2,
+       aes(x= Heart_Disease, fill = Heart_Disease)) +
+       geom_bar() +
+       ggtitle("Number of Heart Disease Cases") +
+       xlab("Presence of Heart Disease") +
+       ylab("Number of Cases") +
+       theme(legend.position = "top", legend.title = element_blank(), 
+             plot.title = element_text(size = 14, face = "bold"))
+
+
+```
+
+\newpage
+```{r visualization B, echo=TRUE}
+# Number of Males and Female
+ggplot(data = data_proc_2,
+       aes(x= Sex, fill = Sex)) +
+       geom_bar() +
+       ggtitle("Number of Males vs Females") +
+       xlab("Males and Females") +
+       ylab("Number of Cases") +
+       theme(legend.position = "top", legend.title = element_blank(), 
+             plot.title = element_text(size = 14, face = "bold"))
+
+
+```
+
+\newpage
+```{r visualization C, echo=TRUE}
+# Number of Cases of Heart Disease by Sex
+ggplot(data = data_proc_2,
+       aes(x= Heart_Disease, fill = Sex)) +
+       geom_bar() +
+       ggtitle("Number of Heart Disease Cases highlighting Sex of Individual") +
+       xlab("Presence of Heart Disease") +
+       ylab("Number of Cases") +
+       theme(legend.position = "top", legend.title = element_blank(), 
+             plot.title = element_text(size = 14, face = "bold"))
+
+
+```
+
+\newpage
+```{r visualization D, echo=TRUE}
+# Distribution of Age / Sex
+ggplot(data = data_proc_2,
+       aes(x= Age, fill = Sex)) +
+       geom_histogram(bins = 20) +
+       ggtitle("Distribution of Age and Sex") +
+       xlab("Age") +
+       ylab("Number of Cases") +
+       theme(legend.position = "top", legend.title = element_blank(), 
+             plot.title = element_text(size = 14, face = "bold"))
+
+
+```
+
+\newpage
+```{r visualization E, echo=TRUE}
+# Density of Heart Disease and Age
+ggplot(data = data_proc_2,
+       aes(x= Age, col = Heart_Disease, fill = Heart_Disease)) +
+  geom_density(alpha = 0.4) +
+  ggtitle("Density of Heart Disease Cases considering Age") +
+  xlab("Age") +
+  ylab("Density") +
+  theme(legend.position = "top", legend.title = element_blank(), 
+        plot.title = element_text(size = 14, face = "bold"))
+
+
+```
+
+\newpage
+```{r visualization F, echo=TRUE}
+# Density of Heart Disease considering Sex and Age
+ggplot(data = data_proc_2,
+       aes(x= Age, col = Sex, fill = Sex)) +
+       geom_density(alpha = 0.4) +
+       ggtitle("Density of Heart Disease Cases considering Sex and Age") +
+       xlab("Age") +
+       ylab("Density") +
+       theme(legend.position = "top", legend.title = element_blank(), 
+             plot.title = element_text(size = 14, face = "bold"))
+
+```
+
+\newpage
+```{r visualization G, echo=TRUE}
+# Density of Heart Disease and Heart Rate
+ggplot(data = data_proc_2,
+       aes(x= Max_HR, col = Heart_Disease, fill = Heart_Disease)) +
+  geom_density(alpha = 0.4) +
+  ggtitle("Density of Heart Disease considering Max Heart Rate") +
+  xlab("Age") +
+  ylab("Density") +
+  theme(legend.position = "top", legend.title = element_blank(), 
+        plot.title = element_text(size = 14, face = "bold"))
+
+```
+
+\newpage
+```{r visualization I, echo=TRUE}
+# Density of Heart Disease and Heart Rate
+ggplot(data = data_proc_2,
+       aes(x= Chest_Pain_Type, col = Heart_Disease, fill = Heart_Disease)) +
+  geom_bar(alpha = 0.4) +
+  ggtitle("Heart Disease Cases and Chest Pain Type") +
+  xlab("Chest Pain Type") +
+  ylab("Count") +
+  theme(legend.position = "top", legend.title = element_blank(),
+        plot.title = element_text(size = 14, face = "bold"))
+
+```
+
+\newpage
+```{r visualization H, echo=TRUE}
+# Cholesterol by Age and Sex
+data_proc_2 %>%
+  ggplot(aes(x=Age,y=Cholesterol,color=Sex, size=Cholesterol))+
+  geom_point(alpha=0.4)+
+  ggtitle("Cholesterol Levels by Age and Sex") +
+  xlab("Age") +
+  ylab("Cholesterol")+
+  theme(legend.position = "top", legend.title = element_blank(), 
+        plot.title = element_text(size = 14, face = "bold"))
+
+```
+
+\newpage
+```{r visualization L, echo=TRUE}
+
+# Defect Presence
+ggplot(data_proc_2, aes(x = Defect_Presence, col = Heart_Disease, fill = Heart_Disease))+
+  geom_bar()+
+  ggtitle("Presence of Heart Defect") +
+  xlab("Heart Defect") +
+  ylab("Count of Cases")+
+theme(legend.position = "top", legend.title = element_blank(), 
+      plot.title = element_text(size = 14, face = "bold"))
+
+
+```
+
+\newpage
+# Application of Machine Learning Techniques
+## KNN-based Model
+
+The first model evaluated in the project is based on the **KNN Technique**. 
+
+According to Wikipedia, *"in k-NN classification, the output is a class membership. An object is classified by a plurality vote of its neighbors, with the object being assigned to the class most common among its k nearest neighbors (k is a positive integer, typically small). If k = 1, then the object is simply assigned to the class of that single nearest neighbor."*
+
+The **hyper-parameter** that must be tune is thus linked to the **number of nearest neighbors (k-value)** to be taken into consideration when making the prediction.
+The *caret* packages covers this need and we able to identify the optimal k value that should be incorporated in the model.
+
+In the plot here below, we can see that a k-value equals to 20 provides the best value in terms of Accuracy.
+```{r Optimal K, echo=FALSE}
+# Train / Test Split via 80/20 split
+set.seed(28081991, sample.kind = "Rounding")
+index <- createDataPartition(y = data_proc_2$Heart_Disease, times = 1, p = 0.2, list = FALSE)
+TrainingSet <- data_proc_2[-index,]  
+TestingSet <- data_proc_2[index,]
+
+#############
+# Model Creation and Deployment
+#############
+
+# Train KNN Model
+set.seed(28081991, sample.kind = "Rounding")
+knn_tune <- data.frame(k = seq(1,30,1))
+train_knn <- train(Heart_Disease ~ ., method = "knn",
+                   data = TrainingSet,
+                   tuneGrid = knn_tune)
+
+# Visualize optimal K and train model accordingly
+k_plot <- ggplot(train_knn, highlight = TRUE)
+k_plot
+
+
+```
+
+When commenting the overall results of the model expressed in the Confusion Matrix, we can see that the model performs quite poorly, with an accuracy rate that is only slightly above the *no-information-rate* of the model.
+
+```{r Model A, echo=FALSE, include=FALSE}
+
+#############
+# Setup data for Modelling Applications
+#############
+
+# Train / Test Split via 80/20 split
+set.seed(28081991, sample.kind = "Rounding")
+index <- createDataPartition(y = data_proc_2$Heart_Disease, times = 1, p = 0.2, list = FALSE)
+TrainingSet <- data_proc_2[-index,]  
+TestingSet <- data_proc_2[index,]
+
+#############
+# Model Creation and Deployment
+#############
+
+# Train KNN Model
+set.seed(28081991, sample.kind = "Rounding")
+knn_tune <- data.frame(k = seq(1,30,1))
+train_knn <- train(Heart_Disease ~ ., method = "knn",
+                   data = TrainingSet,
+                   tuneGrid = knn_tune)
+
+# Visualize optimal K and train model accordingly
+k_plot <- ggplot(train_knn, highlight = TRUE)
+k_plot
+optimal_k <- train_knn$bestTune[1,1]
+knn_optimal_model <- knn3(Heart_Disease  ~ ., data = TrainingSet, k = optimal_k) 
+
+# Predictions and Confusion Matrix
+y_predictions_knn <- predict(knn_optimal_model, TestingSet, type = "class")
+confusion_matrix_knn <- confusionMatrix(data = y_predictions_knn, reference = TestingSet$Heart_Disease, positive = "Yes") 
+print(confusion_matrix_knn)
+
+# Create Metrics
+knn_accuracy <- confusion_matrix_knn$overall["Accuracy"]
+knn_balanced_accuracy <- confusion_matrix_knn$byClass["Balanced Accuracy"]
+knn_sensitivity <- confusion_matrix_knn$byClass["Sensitivity"]
+knn_specificity <- confusion_matrix_knn$byClass["Specificity"]
+
+# Group Metrics in a dataframe that can then be use for other models as well
+knn_results <- c(knn_accuracy, knn_balanced_accuracy, knn_sensitivity, knn_specificity)
+
+
+```
+
+
+\newpage
+
+```{r Confusion Matrix KNN, echo=FALSE}
+
+print(confusion_matrix_knn)
+
+```
+
+
+
+\newpage
+## AdaBoost Classification Trees
+
+The second model we will be looking at is based around the AdaBoost technique.
+
+According to Wikipedia, *AdaBoost, short for Adaptive Boosting, is a machine learning meta-algorithm formulated by Yoav Freund and Robert Schapire, who won the 2003 Gödel Prize for their work. It can be used in conjunction with many other types of learning algorithms to improve performance. The output of the other learning algorithms ('weak learners') is combined into a weighted sum that represents the final output of the boosted classifier. AdaBoost is adaptive in the sense that subsequent weak learners are tweaked in favor of those instances misclassified by previous classifiers. In some problems it can be less susceptible to the overfitting problem than other learning algorithms. The individual learners can be weak, but as long as the performance of each one is slightly better than random guessing, the final model can be proven to converge to a strong learner.*
+
+Furthermore, *AdaBoost (with decision trees as the weak learners) is often referred to as the best out-of-the-box classifier.*
+
+When examining the confusion matrix results, we can see that there is a significant improvemente in terms of accuracy. This brings our current level of accuracy well above the no information rate.
+
+```{r adaboost, echo=FALSE}
+
+#############
+############# Model 2: AdaBoost Classification Trees
+#############
+
+# Train AdaBoost Model
+set.seed(28081991, sample.kind = "Rounding")
+train_ada <- train(Heart_Disease ~ ., method = "adaboost",
+                   data = TrainingSet)
+
+# Predictions and Confusion Matrix
+y_predictions_ada <- predict(train_ada, TestingSet)
+confusion_matrix_ada <- confusionMatrix(data = y_predictions_ada, reference = TestingSet$Heart_Disease, positive = "Yes") 
+print(confusion_matrix_ada)
+
+```
+
+\newpage
+## XGBOOST model
+
+As reported in machinelearningmastery.com, *"This algorithm goes by lots of different names such as gradient boosting, multiple additive regression trees, stochastic gradient boosting or gradient boosting machines.*
+*Boosting is an ensemble technique where new models are added to correct the errors made by existing models. Models are added sequentially until no further improvements can be made. A popular example is the AdaBoost algorithm that weights data points that are hard to predict.*
+*Gradient boosting is an approach where new models are created that predict the residuals or errors of prior models and then added together to make the final prediction. It is called gradient boosting because it uses a gradient descent algorithm to minimize the loss when adding new models.*
+*This approach supports both regression and classification predictive modeling problems."*
+
+In order to tune the model, we must take into consideration several parameters. Here below are some of the parameters taken into consideration.
+
+xgb_grid <- expand.grid(nrounds = 1000,
+                        max_depth = c(2,5,10),
+                        eta = c(0.01),
+                        gamma = c(0.5,1.0),
+                        colsample_bytree = c(0.5),
+                        subsample = c(0.5, 0.6),
+                        min_child_weight = seq(1))
+                        
+Furthermore, we will also take into consideration cross-validation in the training dataset. This will be covered by the following code:
+
+train_control <- trainControl(method = "cv", number = 5)
+# Train xgb model
+train_xgb <- train(Heart_Disease ~ .,
+                 data = TrainingSet,
+                 method ="xgbTree",
+                 tuneGrid = xgb_grid,
+                 trControl = train_control)
+
+
+Let us now look at the results for the model. 
+
+
+```{r Confusion Matrix xgb, echo=FALSE}
+
+# Setup Parameters for Optimization
+# set up the cross-validated hyper-parameter search
+
+set.seed(28081991, sample.kind = "Rounding")
+
+train_control <- trainControl(method = "cv", number = 5)
+
+xgb_grid <- expand.grid(nrounds = 1000,
+                        max_depth = c(2,5,10),
+                        eta = c(0.01),
+                        gamma = c(0.5,1.0),
+                        colsample_bytree = c(0.5),
+                        subsample = c(0.5, 0.6),
+                        min_child_weight = seq(1))
+
+# Train xgb model
+train_xgb <- train(Heart_Disease ~ .,
+                 data = TrainingSet,
+                 method ="xgbTree",
+                 tuneGrid = xgb_grid,
+                 trControl = train_control)
+
+# Predictions and Confusion Matrix
+y_predictions_xgb <- predict(train_xgb, TestingSet)
+confusion_matrix_xgb <- confusionMatrix(data = y_predictions_xgb, reference = TestingSet$Heart_Disease, positive = "Yes") 
+print(confusion_matrix_xgb)
+
+
+```
+
+As we can see, the accuracy has once again improved compared to the previous model. However, the model does seem to perform poorly in terms of sensitivity.
+
+
+\newpage
+# Weighted Space Random Forest Model
+
+The Weighted Space Random Forest technique is, according to the creators of the method (Zhao, Williams and Huang, 2017), *A novel variable weighting method is used for variable subspace selection in place of the traditional approach of random variable sampling. This new approach is particularly useful in building models for high dimensional data.*
+
+```{r wsrf, echo=FALSE}
+#############
+############# Model 4: Weighted Space Random Forest
+#############
+
+set.seed(28081991, sample.kind = "Rounding")
+
+# Train Model
+train_wsrf <- train(Heart_Disease ~ .,
+                  data = TrainingSet,
+                  method ="wsrf",
+                  trControl = train_control)
+
+# Predictions and Confusion Matrix
+y_predictions_wsrf <- predict(train_wsrf, TestingSet)
+confusion_matrix_wsrf <- confusionMatrix(data = y_predictions_wsrf, reference = TestingSet$Heart_Disease, positive = "Yes") 
+print(confusion_matrix_wsrf)
+
+
+
+```
+
+Compared to the previous model, Accuracy has decreased. This model confirms a poor performance in terms of Sensitivity.
+
+
+\newpage
+# Support Vector Machine Model
+Let us now conclude with the last model, based on Support Vector Machines. An SVM can be defined in the following manner, according to Wikipedia: 
+*A support-vector machine constructs a hyperplane or set of hyperplanes in a high- or infinite-dimensional space, which can be used for classification, regression, or other tasks like outliers detection.*
+
+```{r SVM, echo=FALSE}
+
+# Train Model
+train_svmR <- train(Heart_Disease ~ .,
+                    data = TrainingSet,
+                    method ="svmRadial",
+                    trControl = train_control)
+
+# Predictions and Confusion Matrix
+y_predictions_svmR <- predict(train_svmR, TestingSet)
+confusion_matrix_svmR <- confusionMatrix(data = y_predictions_svmR, reference = TestingSet$Heart_Disease, positive = "Yes") 
+print(confusion_matrix_svmR)
+
+
+```
+
+This appears to be the best model, with a strong performance Accuracy and Specificity, while also improving in terms of sensitivity.
+
+\newpage
+# Conclusions
+
+Let us now look at a comparison across all models evaluated.
+```{r model comparison, echo=FALSE}
+# Create Metrics
+knn_accuracy <- confusion_matrix_knn$overall["Accuracy"]
+knn_balanced_accuracy <- confusion_matrix_knn$byClass["Balanced Accuracy"]
+knn_sensitivity <- confusion_matrix_knn$byClass["Sensitivity"]
+knn_specificity <- confusion_matrix_knn$byClass["Specificity"]
+
+# Group Metrics in a dataframe that can then be use for other models as well
+knn_results <- c(knn_accuracy, knn_balanced_accuracy, knn_sensitivity, knn_specificity)
+
+
+# Create Metrics
+ada_accuracy <- confusion_matrix_ada$overall["Accuracy"]
+ada_balanced_accuracy <- confusion_matrix_ada$byClass["Balanced Accuracy"]
+ada_sensitivity <- confusion_matrix_ada$byClass["Sensitivity"]
+ada_specificity <- confusion_matrix_ada$byClass["Specificity"]
+
+# Group Metrics in a dataframe and add to results dataframe
+ada_results <- c(ada_accuracy, ada_balanced_accuracy, ada_sensitivity, ada_specificity)
+model_results_2 <-  rbind(knn_results, ada_results)
+
+# Create Metrics
+xgb_accuracy <- confusion_matrix_xgb$overall["Accuracy"]
+xgb_balanced_accuracy <- confusion_matrix_xgb$byClass["Balanced Accuracy"]
+xgb_sensitivity <- confusion_matrix_xgb$byClass["Sensitivity"]
+xgb_specificity <- confusion_matrix_xgb$byClass["Specificity"]
+
+# Group Metrics in a dataframe and add to results dataframe
+xgb_results <- c(xgb_accuracy, xgb_balanced_accuracy, xgb_sensitivity, xgb_specificity)
+model_results_3 <-  rbind(model_results_2, xgb_results)
+
+
+# Create Metrics
+wsrf_accuracy <- confusion_matrix_wsrf$overall["Accuracy"]
+wsrf_balanced_accuracy <- confusion_matrix_wsrf$byClass["Balanced Accuracy"]
+wsrf_sensitivity <- confusion_matrix_wsrf$byClass["Sensitivity"]
+wsrf_specificity <- confusion_matrix_wsrf$byClass["Specificity"]
+
+# Group Metrics in a dataframe and add to results dataframe
+wsrf_results <- c(wsrf_accuracy, wsrf_balanced_accuracy, wsrf_sensitivity, wsrf_specificity)
+model_results_4 <-  rbind(model_results_3, wsrf_results)
+
+
+# Create Metrics
+svmR_accuracy <- confusion_matrix_svmR$overall["Accuracy"]
+svmR_balanced_accuracy <- confusion_matrix_svmR$byClass["Balanced Accuracy"]
+svmR_sensitivity <- confusion_matrix_svmR$byClass["Sensitivity"]
+svmR_specificity <- confusion_matrix_svmR$byClass["Specificity"]
+
+# Group Metrics in a dataframe and add to results dataframe
+svmR_results <- c(svmR_accuracy, svmR_balanced_accuracy, svmR_sensitivity, svmR_specificity)
+model_results_5 <-  rbind(model_results_4, svmR_results)
+
+
+kable(model_results_5, digits = 3)
+
+```
+
+As we can see, we have a clear 'winner' in terms of all key metrics taken into consideration. Considering the real-life consequences of missing
+a patient actually affected by heart disease, we should pay particular attention to specificity values of the model. 
